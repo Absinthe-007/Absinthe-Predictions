@@ -1,6 +1,8 @@
 """Absinthe Predictions — main pipeline.
 
-python -m pipeline.build                 # normal run (predict / grade / rebuild site data)
+python -m pipeline.build --mode predict  # refresh predictions for games that haven't started
+python -m pipeline.build --mode grade    # grade finished games only (predictions untouched)
+python -m pipeline.build                 # manual: both
 python -m pipeline.build --backfill 1-4  # also build backtest weeks 1-4 of the current season
 """
 from __future__ import annotations
@@ -276,7 +278,38 @@ def grade_completed(game):
     game["graded_at"] = now_iso()
 
 
-def process_week(world, season, stype, week, backtest=False):
+def confidence_score(g):
+    """How comfortable we are with the pick: win probability of the side we picked,
+    docked when the Vegas line and our team model disagree on the winner."""
+    p = g["pred"]
+    wp = p["win_prob_home"]
+    score = max(wp, 1 - wp)
+    v, m = g.get("vegas"), g.get("model") or {}
+    if v and m.get("home") is not None:
+        vegas_home = v["home"] > v["away"]
+        model_home = m["home"] > m["away"]
+        if vegas_home != model_home:
+            score -= 0.04
+    return score
+
+
+def assign_confidence(games):
+    """Grade each game's pick A-F, most probable to least, across the week.
+    A pick keeps its grade once the game has kicked off."""
+    picks = [g for g in games if g.get("pred")]
+    if not picks:
+        return
+    ranked = sorted(picks, key=confidence_score, reverse=True)
+    n = len(ranked)
+    for i, g in enumerate(ranked):
+        if g.get("locked") and g.get("confidence"):
+            continue
+        g["confidence"] = {"grade": "ABCDF"[min(4, i * 5 // n)], "rank": i + 1, "of": n,
+                           "score": round(confidence_score(g), 3),
+                           "pick_prob": round(max(g["pred"]["win_prob_home"], 1 - g["pred"]["win_prob_home"]), 3)}
+
+
+def process_week(world, season, stype, week, backtest=False, allow_predict=True):
     print(f"\n=== {season} {week_label(stype, week)} {'(backtest)' if backtest else ''}")
     games = src.parse_events(src.scoreboard(season, week, stype))
     path = wfile(season, stype, week)
@@ -296,7 +329,7 @@ def process_week(world, season, stype, week, backtest=False):
         rec.update(live)
         has_pred = bool(ex.get("pred"))
         locked = ex.get("locked", False) or (has_pred and g["state"] != "pre")
-        if not locked and (g["state"] == "pre" or not has_pred or backtest and not has_pred):
+        if allow_predict and not locked and (g["state"] == "pre" or not has_pred):
             if rosters is None:
                 rosters = build_rosters(world, season, week, teams, backtest)
             rec.update(predict_game(world, ctx, g, rosters, backtest))
@@ -316,6 +349,7 @@ def process_week(world, season, stype, week, backtest=False):
         print(f"  {g['away']:>3} @ {g['home']:<3}  pred {p.get('away')}-{p.get('home')}  "
               f"{'final ' + str(g['away_score']) + '-' + str(g['home_score']) if g['completed'] else g['state']}"
               f"  {rec.get('grade', {}).get('grade', '')}")
+    assign_confidence(out_games)
     data = {"season": season, "seasontype": stype, "week": week, "label": week_label(stype, week),
             "updated": now_iso(), "backtest": backtest, "games": sorted(out_games, key=lambda x: x["date"])}
     path.write_text(json.dumps(data, separators=(",", ":")))
@@ -336,6 +370,7 @@ def build_accuracy(weeks):
            "all": {"g": 0, "w": 0, "sc": 0.0, "h": 0, "n": 0, "pg": 0}}
     by_stat = {}
     by_pos = {}
+    by_conf = {}
     for wk in weeks:
         r = {"key": f"{wk['season']}-{wk['seasontype']}-{wk['week']:02d}", "label": wk["label"], "season": wk["season"],
              "games": 0, "winners": 0, "game_score": 0.0, "beat_vegas": 0, "ats": 0, "ats_n": 0,
@@ -351,6 +386,12 @@ def build_accuracy(weeks):
             r["winners"] += bool(gr.get("winner_correct"))
             r["game_score"] += gr["score"]
             r["beat_vegas"] += bool(gr.get("beat_vegas_margin"))
+            cg = (g.get("confidence") or {}).get("grade")
+            if cg and gr.get("winner_correct") is not None:
+                bc = by_conf.setdefault(cg, {"g": 0, "w": 0, "og": 0, "ow": 0})
+                bc["g"] += 1; bc["w"] += bool(gr["winner_correct"])
+                if official:
+                    bc["og"] += 1; bc["ow"] += bool(gr["winner_correct"])
             if "ats_correct" in gr:
                 r["ats_n"] += 1
                 r["ats"] += bool(gr["ats_correct"])
@@ -390,7 +431,9 @@ def build_accuracy(weeks):
     stat_rows.sort(key=lambda x: -x["n"])
     pos_rows = [{"pos": k, "hits": v["h"], "n": v["n"], "pct": round(100 * v["h"] / max(v["n"], 1), 1)}
                 for k, v in sorted(by_pos.items())]
-    return {"updated": now_iso(), "weeks": rows, "by_stat": stat_rows, "by_pos": pos_rows,
+    conf_rows = [{"grade": k, "games": v["g"], "wins": v["w"], "pct": round(100 * v["w"] / max(v["g"], 1), 1),
+                  "official_games": v["og"], "official_wins": v["ow"]} for k, v in sorted(by_conf.items())]
+    return {"updated": now_iso(), "weeks": rows, "by_stat": stat_rows, "by_pos": pos_rows, "by_confidence": conf_rows,
             "totals": {b: rows[-1][f"run_{b}"] if rows else None for b in ("all", "official")}}
 
 
@@ -494,8 +537,10 @@ def leaderboard(records, weeks, min_games=2):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", help="weeks of the current season to build as backtests, e.g. 1-4")
-    ap.add_argument("--run", default="manual", help="label for this run (night / morning / manual)")
+    ap.add_argument("--mode", default="manual", choices=["manual", "predict", "grade"],
+                    help="predict = refresh upcoming predictions, grade = grade finished games only")
     args = ap.parse_args()
+    allow_predict = args.mode in ("manual", "predict")
 
     sb = src.scoreboard()
     season = sb["season"]["year"]
@@ -521,9 +566,16 @@ def main():
     if prev and wfile(*prev).exists():
         d = json.loads(wfile(*prev).read_text())
         if any(g.get("pred") and not g.get("grade") for g in d["games"]):
-            process_week(world, *prev, backtest=d.get("backtest", False))
+            process_week(world, *prev, backtest=d.get("backtest", False), allow_predict=False)
 
-    process_week(world, season, stype, week)
+    process_week(world, season, stype, week, allow_predict=allow_predict)
+
+    # older week files written before confidence grades existed
+    for pth in sorted(WEEKS.glob("*.json")):
+        d = json.loads(pth.read_text())
+        if any(g.get("pred") and not g.get("confidence") for g in d["games"]):
+            assign_confidence(d["games"])
+            pth.write_text(json.dumps(d, separators=(",", ":")))
 
     weeks = all_weeks()
     print("\n• aggregating accuracy + player pages")
@@ -535,8 +587,11 @@ def main():
     idx = [{"key": f"{w['season']}-{w['seasontype']}-{w['week']:02d}", "label": w["label"], "season": w["season"],
             "backtest": w.get("backtest", False)} for w in weeks]
     (DATA / "weeks.json").write_text(json.dumps(idx))
+    prev_meta = json.loads((DATA / "meta.json").read_text()) if (DATA / "meta.json").exists() else {}
     (DATA / "meta.json").write_text(json.dumps({
-        "updated": now_iso(), "run": args.run, "season": season, "seasontype": stype, "week": week,
+        "last_predict": now_iso() if allow_predict else prev_meta.get("last_predict"),
+        "last_grade": now_iso() if args.mode in ("manual", "grade") else prev_meta.get("last_grade"),
+        "updated": now_iso(), "run": args.mode, "season": season, "seasontype": stype, "week": week,
         "current": f"{season}-{stype}-{week:02d}", "label": week_label(stype, week),
         "sources": ["ESPN (schedule, live scores, Vegas lines, weather, injuries, box scores)",
                     "nflverse (player game logs 2018-present, player IDs)",
