@@ -10,11 +10,15 @@ Weekly NFL predictions (Thursday night, every Sunday game and Monday night): a p
 - **Player projections.** QB, RB, WR, TE, K and top defenders. Team volume × the player's usage share × his efficiency, adjusted for the opposing defense against his position, game script, injuries (an injured player's targets and carries go to healthy teammates) and his history against this opponent.
 - **Clickable players.** Every game since 2018 against any opponent, season-by-season averages, the last 10 games, injury status and Absinthe's hit rate on that player week by week.
 - **Grading.** Game grades (A+ to F) and player grades. A stat is a "hit" when it lands inside a tolerance band around the projection. The Accuracy page keeps a running weekly tally broken down by stat and position.
+- **Confidence grades.** Every pick gets A (most probable) to F (least comfortable), ranked across the week, and the Accuracy page tracks how each grade does.
 - **Locked predictions.** Each projection freezes at kickoff and can't be changed after the game starts.
 
 ## Schedule
 
-`.github/workflows/update.yml` runs at **11:30 PM** and **4:30 AM Central** every day. GitHub cron uses UTC, so the workflow fires at both possible UTC times and `pipeline/gate.py` lets one through per slot, which keeps the times correct across daylight saving time.
+- **Predictions** refresh only on **Thursday, Sunday and Monday**, **5 hours before that day's first kickoff** (2:15 PM for a 7:15 PM game, 7:00 AM for noon Sunday games).
+- **Grading** runs at **11:30 PM Central** on Thursday, Sunday and Monday.
+
+`.github/workflows/update.yml` wakes every 15 minutes on those days and `pipeline/gate.py` checks ESPN's kickoff times to decide whether it's time to predict, time to grade, or nothing.
 
 ## Data sources
 
