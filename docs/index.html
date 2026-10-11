@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Absinthe Predictions</title>
+<meta name="description" content="Weekly NFL score and player stat predictions, graded every night.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2311140f'/><path d='M20 14h24l-6 22a6 6 0 0 1-12 0z' fill='%2397d84a'/><rect x='30' y='40' width='4' height='10' fill='%2397d84a'/><rect x='22' y='50' width='20' height='4' rx='2' fill='%2397d84a'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M20 14h24l-6 22a6 6 0 0 1-12 0z"/><rect x="30" y="40" width="4" height="10"/><rect x="22" y="50" width="20" height="4" rx="2"/></svg>
+      <span>Absinthe <b>Predictions</b></span>
+    </a>
+    <nav>
+      <a href="#/" data-nav="week">Games</a>
+      <a href="#/accuracy" data-nav="accuracy">Accuracy</a>
+      <a href="#/players" data-nav="players">Players</a>
+      <a href="#/about" data-nav="about">How it works</a>
+    </nav>
+  </div>
+</header>
+<main id="app" class="wrap"><div class="loading">Loading…</div></main>
+<footer class="wrap foot">
+  <span id="updated"></span>
+  <span>Predictions are estimates for entertainment, not betting advice.</span>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
